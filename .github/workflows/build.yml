@@ -1,0 +1,130 @@
+name: Build
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *'
+
+concurrency:
+  group: build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      packages: write
+      contents: read
+    steps:
+      - name: Get latest version
+        run: |
+          #!/bin/bash
+          url="https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/latest-virtio/"
+          resp=$(curl -sS $url)
+          latest_tag=$(echo "$resp" | grep -o 'href="[^"]*' | tail -c +98 | cut -f1 -d"/")
+          [ -z "$latest_tag" ] && echo "Tag not found!" && exit 1
+          echo "Found tag: \"${latest_tag}\""
+          echo "latest_tag=$latest_tag" >> $GITHUB_ENV
+          base=$(echo "$latest_tag" | cut -f1 -d"-")
+          echo "latest_base=$base" >> $GITHUB_ENV
+
+      - name: Check if the tag exists locally
+        uses: action-pack/tag-exists@v1
+        id: checkTag
+        with: 
+          tag: 'v${{ env.latest_tag }}'         
+
+      - name: Finish when found
+        run: |
+          #!/bin/bash
+          if [[ "${{ steps.checkTag.outputs.exists }}" == "true" ]]; then
+            echo "exists=true" >> $GITHUB_ENV
+            exit 0
+          fi
+          url="https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-${{ env.latest_tag }}"
+          echo "Checking if ${url} exists.."
+          resp=$(curl -I 2>/dev/null $url | head -1)
+          if echo $resp | grep 404 >/dev/null; then
+            echo "Download $url not found!" && exit 1
+          else
+            echo "exists=false" >> $GITHUB_ENV
+          fi
+
+      - name: Download Fedora drivers
+        if: env.exists == 'false'
+        id: fedora
+        run: |
+          #!/bin/bash
+          sudo apt update
+          sudo apt install -y rdfind genisoimage libarchive-tools symlinks
+          url="https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-${{ env.latest_tag }}/virtio-win-${{ env.latest_base }}.iso"
+          echo "Downloading $url"
+          wget "$url" -O "/tmp/latest.iso" -q
+          rm -rf /tmp/iso && mkdir /tmp/iso
+          bsdtar -xf "/tmp/latest.iso" -C /tmp/iso/
+
+      - name: Strip unnecessary bloat (safe for all platforms)
+        if: env.exists == 'false'
+        id: strip
+        run: |
+          #!/bin/bash
+          cd /tmp/iso
+
+          # Remove debug symbols (huge size, not needed by end users)
+          sudo find . -type f -iname "*.pdb" -delete
+
+          # Remove logs, backup, and temp files
+          sudo find . -type f \( -iname "*.log" -o -iname "*.bak" -o -iname "*.tmp" \) -delete
+
+          # Remove source, test scripts (rare, but sometimes present)
+          sudo find . -type f \( -iname "*.sh" -o -iname "*.ps1" -o -iname "*.bat" \) -delete
+          sudo find . -type d -iname "tests" -exec rm -rf {} +
+
+          # Remove documentation except for readme*
+          sudo find . -type f \( -iname "*.md" -o -iname "*.txt" -o -iname "*.pdf" \) ! -iname "readme*" -delete
+
+          # Remove empty directories
+          sudo find . -type d -empty -delete
+
+      - name: Create symbolic links
+        if: env.exists == 'false'
+        id: symlinks
+        run: |
+          #!/bin/bash
+          sudo rdfind -removeidentinode false -makehardlinks true /tmp/iso/
+          symlinks -orc /tmp/iso
+
+      - name: Build minified ISO
+        if: env.exists == 'false'
+        id: build
+        run: |
+          #!/bin/bash
+          cd /tmp/iso
+          genisoimage -o /tmp/virtio-win-${{ env.latest_base }}.iso -r -iso-level 4 -input-charset iso8859-1 -V "virtio-win-${{ env.latest_base }}" /tmp/iso
+          tar -C /tmp/iso -cvzf /tmp/virtio-win-${{ env.latest_base }}.tar.gz * >/dev/null
+          XZ_OPT=-9 tar -C /tmp/iso -Jcvf /tmp/virtio-win-${{ env.latest_base }}.tar.xz * >/dev/null         
+
+      - name: Checkout
+        if: env.exists == 'false'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create a release
+        if: env.exists == 'false'
+        uses: action-pack/github-release@v2
+        with:
+          body: " "
+          tag: "v${{ env.latest_tag }}"
+          title: "v${{ env.latest_base }}"
+          token: ${{ secrets.REPO_ACCESS_TOKEN }}
+
+      - name: Update release
+        if: env.exists == 'false'
+        uses: AButler/upload-release-assets@v3.0
+        with:
+          files: '/tmp/virtio-win-${{ env.latest_base }}.*'
+          release-tag: "v${{ env.latest_tag }}"
+          repo-token: ${{ secrets.REPO_ACCESS_TOKEN }}
