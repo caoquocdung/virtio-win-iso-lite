@@ -74,7 +74,7 @@ Get the latest cleaned ISO and archives from the [Releases page](https://github.
 ## License
 
 This project only redistributes open Fedora virtio-win drivers.  
-Workflow and scripts are licensed under the MIT License.  
+Workflow and scripts are licensed under the GPL3 License.  
 All driver binaries remain the copyright of their original authors.
 
 ---
@@ -83,6 +83,7 @@ All driver binaries remain the copyright of their original authors.
 
 - [Fedora virtio-win project](https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/latest-virtio/) for original driver packages.
 - [GitHub Actions](https://github.com/features/actions) for CI/CD automation.
+- [qemus/virtiso](https://github.com/qemus/virtiso) for the idea.
 
 ---
 
